@@ -246,10 +246,9 @@ class GSelectLayer(nn.Module):
         return x
 
 class DSelectLayer(nn.Module):
-    def __init__(self, pre, chain, inputs):
+    def __init__(self, chain, inputs):
         super(DSelectLayer, self).__init__()
         assert len(chain) == len(inputs)
-        self.pre = pre
         self.chain = chain
         self.inputs = inputs
         self.N = len(self.chain)
@@ -264,10 +263,6 @@ class DSelectLayer(nn.Module):
         min_level_weight, max_level_weight = int(cur_level + 1) - cur_level, cur_level - int(cur_level)
 
         _from, _to, _step = min_level + 1, self.N, 1
-
-        if self.pre is not None:
-            x = self.pre(x)
-
 
         if max_level == min_level:
             x = self.inputs[max_level](x)
@@ -477,7 +472,7 @@ def D_conv(incoming, in_channels, out_channels, kernel_size, padding, nonlineari
 
 class Discriminator(nn.Module):
     def __init__(self,
-                num_channels    = 1,        # Overridden based on dataset.
+                num_channels    = 3,        # Overridden based on dataset.
                 resolution      = 32,       # Overridden based on dataset.
                 label_size      = 0,        # Overridden based on dataset.
                 fmap_base       = 4096,
@@ -520,40 +515,37 @@ class Discriminator(nn.Module):
         lods = nn.ModuleList()
         pre = None
 
-        nins.append(NINLayer([], self.num_channels, self.get_nf(R-1), act, iact, negative_slope, True, self.use_wscale))
+        nin = nn.Conv2d(self.num_channels, self.get_nf(R-1), kernel_size=7, stride=1, padding=3)
+        nin = init_weights(nin)
+        nins.append(nin)
 
         for I in range(R-1, 1, -1):
             ic, oc = self.get_nf(I), self.get_nf(I-1)
-            net = D_conv([], ic, ic, 3, 1, act, iact, negative_slope, False,
-                        self.use_wscale, self.use_gdrop, self.use_layernorm, gdrop_param)
-            net = D_conv(net, ic, oc, 3, 1, act, iact, negative_slope, False,
-                        self.use_wscale, self.use_gdrop, self.use_layernorm, gdrop_param)
-            net += [nn.AvgPool2d(kernel_size=2, stride=2, ceil_mode=False, count_include_pad=False)]
+            net = [nn.Conv2d(ic, ic, kernel_size=3, stride=1, padding=1),
+                   nn.InstanceNorm2d(ic),
+                   nn.LeakyReLU(0.2, True),
+                   nn.Conv2d(ic, oc, kernel_size=3, stride=1, padding=1),
+                   nn.InstanceNorm2d(oc),
+                   nn.LeakyReLU(0.2, True),
+                   nn.AvgPool2d(kernel_size=2, stride=2, ceil_mode=False, count_include_pad=False)]
+            net = init_weights(net)
             lods.append(nn.Sequential(*net))
-            # nin = [nn.AvgPool2d(kernel_size=2, stride=2, ceil_mode=False, count_include_pad=False)]
-            nin = []
-            nin = NINLayer(nin, self.num_channels, oc, act, iact, negative_slope, True, self.use_wscale)
+
+            nin = nn.Conv2d(self.num_channels, oc, kernel_size=7, stride=1, padding=3)
+            nin = init_weights(nin)
             nins.append(nin)
 
-        net = []
-        ic = oc = self.get_nf(1)
-        if self.mbstat_avg is not None:
-            net += [MinibatchStatConcatLayer(averaging=self.mbstat_avg)]
-            ic += 1
-        net = D_conv(net, ic, oc, 3, 1, act, iact, negative_slope, False,
-                    self.use_wscale, self.use_gdrop, self.use_layernorm, gdrop_param)
-        net = D_conv(net, oc, self.get_nf(0), 4, 0, act, iact, negative_slope, False,
-                    self.use_wscale, self.use_gdrop, self.use_layernorm, gdrop_param)
+        ic, oc = self.get_nf(1), self.get_nf(0)
+        net = nn.Sequential(nn.Conv2d(ic, ic, kernel_size=3, stride=1, padding=1),
+                           nn.InstanceNorm2d(ic),
+                           nn.LeakyReLU(0.2, True),
+                           nn.Conv2d(ic, oc, kernel_size=3, stride=1, padding=1),
+                           nn.InstanceNorm2d(oc),
+                           nn.LeakyReLU(0.2, True),
+                           nn.Conv2d(oc,self.num_channels,kernel_size=1,stride=1))
+        lods.append(net)
 
-        # Increasing Variation Using MINIBATCH Standard Deviation
-        if self.mbdisc_kernels:
-            net += [MinibatchDiscriminationLayer(num_kernels=self.mbdisc_kernels)]
-
-        oc = 1 + self.label_size
-        # lods.append(NINLayer(net, self.get_nf(0), oc, 'linear', 'linear', None, True, self.use_wscale))
-        lods.append(NINLayer(net, self.get_nf(0), oc, output_act, output_iact, None, True, self.use_wscale))
-
-        self.output_layer = DSelectLayer(pre, lods, nins)
+        self.output_layer = DSelectLayer(lods, nins)
 
     def get_nf(self, stage):
         return min(int(self.fmap_base / (2.0 ** (stage * self.fmap_decay))), self.fmap_max)
