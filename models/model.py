@@ -214,11 +214,9 @@ class GSelectLayer(nn.Module):
         self.post = post
         self.N = len(self.chain)
 
-    def forward(self, x, y=None, cur_level=None, insert_y_at=None):
+    def forward(self, x, cur_level=None):
         if cur_level is None:
             cur_level = self.N  # cur_level: physical index
-        if y is not None:
-            assert insert_y_at is not None
 
         min_level, max_level = int(np.floor(cur_level - 1)), int(np.ceil(cur_level - 1))
         min_level_weight, max_level_weight = int(cur_level + 1) - cur_level, cur_level - int(cur_level)
@@ -228,13 +226,12 @@ class GSelectLayer(nn.Module):
         if self.pre is not None:
             x = self.pre(x)
 
+        print('after pre')
+        print(x.size())
         out = {}
 
         for level in range(_from, _to, _step):
-            if level == insert_y_at:
-                x = self.chain[level](x, y)
-            else:
-                x = self.chain[level](x)
+            x = self.chain[level](x)
 
             if level == min_level:
                 out['min_level'] = self.post[level](x)
@@ -253,11 +250,9 @@ class DSelectLayer(nn.Module):
         self.inputs = inputs
         self.N = len(self.chain)
 
-    def forward(self, x, y=None, cur_level=None, insert_y_at=None):
+    def forward(self, x, cur_level=None):
         if cur_level is None:
             cur_level = self.N  # cur_level: physical index
-        if y is not None:
-            assert insert_y_at is not None
 
         max_level, min_level = int(np.floor(self.N - cur_level)), int(np.ceil(self.N - cur_level))
         min_level_weight, max_level_weight = int(cur_level + 1) - cur_level, cur_level - int(cur_level)
@@ -266,31 +261,19 @@ class DSelectLayer(nn.Module):
 
         if max_level == min_level:
             x = self.inputs[max_level](x)
-            if max_level == insert_y_at:
-                x = self.chain[max_level](x, y)
-            else:
-                x = self.chain[max_level](x)
+            x = self.chain[max_level](x)
         else:
             out = {}
             tmp = self.inputs[max_level](x)
-            if max_level == insert_y_at:
-                tmp = self.chain[max_level](tmp, y)
-            else:
-                tmp = self.chain[max_level](tmp)
+            tmp = self.chain[max_level](tmp)
             out['max_level'] = tmp
             out['min_level'] = self.inputs[min_level](x)
             x = resize_activations(out['min_level'], out['max_level'].size()) * min_level_weight + \
                 out['max_level'] * max_level_weight
-            if min_level == insert_y_at:
-                x = self.chain[min_level](x, y)
-            else:
-                x = self.chain[min_level](x)
+            x = self.chain[min_level](x)
 
         for level in range(_from, _to, _step):
-            if level == insert_y_at:
-                x = self.chain[level](x, y)
-            else:
-                x = self.chain[level](x)
+            x = self.chain[level](x)
 
         return x
 
