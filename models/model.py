@@ -388,19 +388,19 @@ class Generator(nn.Module):
         output_iact = 'tanh' if self.tanh_at_end else 'linear'
 
 
-        pre = G_conv([], num_channels, self.get_nf(R), 7, 3, act, iact,
-               False, self.use_wscale, self.use_pixelnorm)
+        pre = [nn.ReflectionPad2d(3),
+               nn.Conv2d(num_channels, self.get_nf(R), kernel_size=7, padding=0),
+               nn.InstanceNorm2d(self.get_nf(R)),
+               nn.ReLU(True)]
         for i in range(R):
             ic,oc = self.get_nf(R-i), self.get_nf(R-i-1)
-            pre = G_conv(pre, ic, oc, 3, 1, act, iact,
-                        False, self.use_wscale, self.use_pixelnorm,stride=2)
-            if i==R-1:
-                pre = G_conv(pre, oc, oc, 3, 1, act, iact,
-                            True, self.use_wscale, self.use_pixelnorm)
-            else:
-                pre = G_conv(pre, oc, oc, 3, 1, act, iact,
-                            False, self.use_wscale, self.use_pixelnorm)
-#         pre_model = nn.Sequential(*pre)
+            pre += [nn.Conv2d(ic, oc, kernel_size=3, stride=2, padding=1),
+                    nn.Conv2d(oc, oc, kernel_size=2, stride=1, padding=1),
+                    nn.InstanceNorm2d(self.get_nf(R)),
+                    nn.ReLU(True)]
+
+        pre_model = nn.Sequential(*pre)
+        pre_model = init_weights(pre_model)
         lods = nn.ModuleList()
         nins = nn.ModuleList()
 
@@ -424,13 +424,37 @@ class Generator(nn.Module):
             nins.append(NINLayer([], oc, self.num_channels, output_act, output_iact, None, True,
                                  self.use_wscale))  # to_rgb layer
 
-        self.output_layer = GSelectLayer(pre, lods, nins)
+        self.output_layer = GSelectLayer(pre_model, lods, nins)
 
     def get_nf(self, stage):
         return min(int(self.fmap_base / (2.0 ** (stage * self.fmap_decay))), self.fmap_max)
 
     def forward(self, x, y=None, cur_level=None, insert_y_at=None):
         return self.output_layer(x, y, cur_level, insert_y_at)
+
+def init_weights(net, init_type='normal', gain=0.02):
+    def init_func(m):
+        classname = m.__class__.__name__
+        if hasattr(m, 'weight') and (classname.find('Conv') != -1 or classname.find('Linear') != -1):
+            if init_type == 'normal':
+                init.normal_(m.weight.data, 0.0, gain)
+            elif init_type == 'xavier':
+                init.xavier_normal_(m.weight.data, gain=gain)
+            elif init_type == 'kaiming':
+                init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
+            elif init_type == 'orthogonal':
+                init.orthogonal_(m.weight.data, gain=gain)
+            else:
+                raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
+            if hasattr(m, 'bias') and m.bias is not None:
+                init.constant_(m.bias.data, 0.0)
+        elif classname.find('BatchNorm2d') != -1:
+            init.normal_(m.weight.data, 1.0, gain)
+            init.constant_(m.bias.data, 0.0)
+
+#     print('initialize network with %s' % init_type)
+    net.apply(init_func)
+    return net
 
 def D_conv(incoming, in_channels, out_channels, kernel_size, padding, nonlinearity, init, param=None,
         to_sequential=True, use_wscale=True, use_gdrop=True, use_layernorm=False, gdrop_param=dict()):
