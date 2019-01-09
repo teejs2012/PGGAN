@@ -52,12 +52,13 @@ def get_img(img_path, is_crop=True, crop_h=256, resize_h=64, normalize=False):
 #         scipy.misc.imsave(file_name+'.png', combined_imgs)
 
 class Data:
-    def __init__(self,folder):
+    def __init__(self,folder,max_size=256):
         self.datapath = folder
         if not os.path.isdir(folder):
             print("the folder does not exist")
         self.files = os.listdir(self.datapath)
         self.count = 0
+        self.max_size = max_size
 
     def next(self, batch_size, res, cur_level = None):
         if self.count+batch_size >= len(self.files):
@@ -70,6 +71,12 @@ class Data:
 
             transform = transforms.Compose([
                 transforms.Resize([res,res]),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=(0.5,0.5,0.5),std=(0.5,0.5,0.5))
+            ])
+            
+            max_transform = transforms.Compose([
+                transforms.Resize([self.max_size,self.max_size]),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=(0.5,0.5,0.5),std=(0.5,0.5,0.5))
             ])
@@ -86,8 +93,16 @@ class Data:
                 imgs = result_img
             else:
                 imgs = torch.cat((imgs,result_img),0)
+                
+            max_result_img = max_transform(img)
+            max_result_img = max_result_img.unsqueeze(0)
+            if ind == self.count:
+                max_imgs = max_result_img
+            else:
+                max_imgs = torch.cat((max_imgs,max_result_img),0)
+                
         self.count = self.count + batch_size
-        return imgs
+        return imgs, max_imgs
 
 # class CelebA():
 #     def __init__(self):

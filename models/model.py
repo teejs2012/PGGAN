@@ -394,9 +394,13 @@ class Generator(nn.Module):
             ic,oc = self.get_nf(R-i), self.get_nf(R-i-1)
             pre = G_conv(pre, ic, oc, 3, 1, act, iact,
                         False, self.use_wscale, self.use_pixelnorm,stride=2)
-            pre = G_conv(pre, oc, oc, 3, 1, act, iact,
-                        False, self.use_wscale, self.use_pixelnorm)
-        pre_model = nn.Sequential(*pre)
+            if i==R-1:
+                pre = G_conv(pre, oc, oc, 3, 1, act, iact,
+                            True, self.use_wscale, self.use_pixelnorm)
+            else:
+                pre = G_conv(pre, oc, oc, 3, 1, act, iact,
+                            False, self.use_wscale, self.use_pixelnorm)
+#         pre_model = nn.Sequential(*pre)
         lods = nn.ModuleList()
         nins = nn.ModuleList()
 
@@ -420,7 +424,7 @@ class Generator(nn.Module):
             nins.append(NINLayer([], oc, self.num_channels, output_act, output_iact, None, True,
                                  self.use_wscale))  # to_rgb layer
 
-        self.output_layer = GSelectLayer(pre_model, lods, nins)
+        self.output_layer = GSelectLayer(pre, lods, nins)
 
     def get_nf(self, stage):
         return min(int(self.fmap_base / (2.0 ** (stage * self.fmap_decay))), self.fmap_max)
