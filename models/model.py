@@ -222,12 +222,15 @@ class GSelectLayer(nn.Module):
         min_level_weight, max_level_weight = int(cur_level + 1) - cur_level, cur_level - int(cur_level)
 
         _from, _to, _step = 0, max_level + 1, 1
-
+        
+#         print('before pre')
+#         print(x.size())
         if self.pre is not None:
             x = self.pre(x)
 
-        print('after pre')
-        print(x.size())
+#         print('after pre')
+#         print(x.size())
+        
         out = {}
 
         for level in range(_from, _to, _step):
@@ -365,7 +368,7 @@ class Generator(nn.Module):
         for i in range(R):
             ic,oc = self.get_nf(R-i), self.get_nf(R-i-1)
             pre += [nn.Conv2d(ic, oc, kernel_size=3, stride=2, padding=1),
-                    nn.Conv2d(oc, oc, kernel_size=2, stride=1, padding=1),
+                    nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1),
                     nn.InstanceNorm2d(self.get_nf(R)),
                     nn.ReLU(True)]
 
@@ -408,8 +411,8 @@ class Generator(nn.Module):
     def get_nf(self, stage):
         return min(int(self.fmap_base / (2.0 ** (stage * self.fmap_decay))), self.fmap_max)
 
-    def forward(self, x, y=None, cur_level=None, insert_y_at=None):
-        return self.output_layer(x, y, cur_level, insert_y_at)
+    def forward(self, x, cur_level=None):
+        return self.output_layer(x, cur_level)
 
 def init_weights(net, init_type='normal', gain=0.02):
     def init_func(m):
@@ -503,15 +506,15 @@ class Discriminator(nn.Module):
 
         for I in range(R-1, 1, -1):
             ic, oc = self.get_nf(I), self.get_nf(I-1)
-            net = [nn.Conv2d(ic, ic, kernel_size=3, stride=1, padding=1),
+            net = nn.Sequential(nn.Conv2d(ic, ic, kernel_size=3, stride=1, padding=1),
                    nn.InstanceNorm2d(ic),
                    nn.LeakyReLU(negative_slope, True),
                    nn.Conv2d(ic, oc, kernel_size=3, stride=1, padding=1),
                    nn.InstanceNorm2d(oc),
                    nn.LeakyReLU(negative_slope, True),
-                   nn.AvgPool2d(kernel_size=2, stride=2, ceil_mode=False, count_include_pad=False)]
+                   nn.AvgPool2d(kernel_size=2, stride=2, ceil_mode=False, count_include_pad=False))
             net = init_weights(net)
-            lods.append(nn.Sequential(*net))
+            lods.append(net)
 
             nin = nn.Conv2d(self.num_channels, oc, kernel_size=7, stride=1, padding=3)
             nin = init_weights(nin)
@@ -533,9 +536,9 @@ class Discriminator(nn.Module):
     def get_nf(self, stage):
         return min(int(self.fmap_base / (2.0 ** (stage * self.fmap_decay))), self.fmap_max)
 
-    def forward(self, x, y=None, cur_level=None, insert_y_at=None, gdrop_strength=0.0):
+    def forward(self, x, cur_level=None, gdrop_strength=0.0):
         for module in self.modules():
             if hasattr(module, 'strength'):
                 module.strength = gdrop_strength
-        return self.output_layer(x, y, cur_level, insert_y_at)
+        return self.output_layer(x, cur_level)
 
