@@ -393,28 +393,37 @@ class Generator(nn.Module):
 
         pre_model = nn.Sequential(*pre)
         pre_model = init_weights(pre_model)
+
         lods = nn.ModuleList()
         nins = nn.ModuleList()
 
-        layers = G_conv([], latent_size, self.get_nf(1), 4, 3, act, iact,
-                        False, self.use_wscale, self.use_pixelnorm)
-        net = G_conv(layers, latent_size, self.get_nf(1), 3, 1, act, iact,
-                     True, self.use_wscale, self.use_pixelnorm)  # first block
+        oc = self.get_nf(1)
+        layers = [nn.Conv2d(latent_size, oc, kernel_size=4, stride=1, padding=3),
+                    nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1),
+                    nn.InstanceNorm2d(oc),
+                    nn.ReLU(True)]
+        net = nn.Sequential(*layers)
 
         lods.append(net)
-        nins.append(NINLayer([], self.get_nf(1), self.num_channels, output_act, output_iact, None, True,
-                             self.use_wscale))  # to_rgb layer
+        nins.append(nn.Sequential(nn.ReflectionPad2d(3),
+                                      nn.Conv2d(oc, self.num_channels, kernel_size=7, padding=0),
+                                      nn.Tanh()))  # to_rgb layer
 
         for I in range(2, R):  # following blocks
             ic, oc = self.get_nf(I - 1), self.get_nf(I)
-            layers = [nn.Upsample(scale_factor=2, mode='nearest')]  # upsample
-            layers = G_conv(layers, ic, oc, 3, 1, act, iact, False, self.use_wscale,
-                            self.use_pixelnorm)
-            net = G_conv(layers, oc, oc, 3, 1, act, iact, True, self.use_wscale,
-                         self.use_pixelnorm)
+            layers = [nn.Upsample(scale_factor=2, mode='nearest'),
+                      nn.Conv2d(ic, oc, kernel_size=3, stride=1, padding=1),
+                      nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1),
+                      nn.InstanceNorm2d(oc),
+                      nn.ReLU(True)]
+            net = nn.Sequential(*layers)
+            net = init_weights(net)
             lods.append(net)
-            nins.append(NINLayer([], oc, self.num_channels, output_act, output_iact, None, True,
-                                 self.use_wscale))  # to_rgb layer
+            nin = nn.Sequential(nn.ReflectionPad2d(3),
+                                      nn.Conv2d(oc, self.num_channels, kernel_size=7, padding=0),
+                                      nn.Tanh())
+            nin = init_weights(nin)
+            nins.append(nin)  # to_rgb layer
 
         self.output_layer = GSelectLayer(pre_model, lods, nins)
 
