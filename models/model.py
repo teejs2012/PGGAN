@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
+from torch.nn import init
 from torch.nn.parameter import Parameter
 from torch.nn import functional as F
 from torch.nn.init import kaiming_normal, calculate_gain
@@ -228,16 +229,12 @@ class GSelectLayer(nn.Module):
             x = self.pre(x)
 
         out = {}
-        if DEBUG:
-            print('G: level=%s, size=%s' % ('in', x.size()))
+
         for level in range(_from, _to, _step):
             if level == insert_y_at:
                 x = self.chain[level](x, y)
             else:
                 x = self.chain[level](x)
-
-            if DEBUG:
-                print('G: level=%d, size=%s' % (level, x.size()))
 
             if level == min_level:
                 out['min_level'] = self.post[level](x)
@@ -245,8 +242,7 @@ class GSelectLayer(nn.Module):
                 out['max_level'] = self.post[level](x)
                 x = resize_activations(out['min_level'], out['max_level'].size()) * min_level_weight + \
                     out['max_level'] * max_level_weight
-        if DEBUG:
-            print('G:', x.size())
+
         return x
 
 class DSelectLayer(nn.Module):
@@ -272,8 +268,6 @@ class DSelectLayer(nn.Module):
         if self.pre is not None:
             x = self.pre(x)
 
-        if DEBUG:
-            print('D: level=%s, size=%s, max_level=%s, min_level=%s' % ('in', x.size(), max_level, min_level))
 
         if max_level == min_level:
             x = self.inputs[max_level](x)
@@ -303,8 +297,6 @@ class DSelectLayer(nn.Module):
             else:
                 x = self.chain[level](x)
 
-            if DEBUG:
-                print('D: level=%d, size=%s' % (level, x.size()))
         return x
 
 
