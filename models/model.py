@@ -513,7 +513,6 @@ class Discriminator(nn.Module):
 
         nins = nn.ModuleList()
         lods = nn.ModuleList()
-        pre = None
 
         nin = nn.Conv2d(self.num_channels, self.get_nf(R-1), kernel_size=7, stride=1, padding=3)
         nin = init_weights(nin)
@@ -523,10 +522,10 @@ class Discriminator(nn.Module):
             ic, oc = self.get_nf(I), self.get_nf(I-1)
             net = [nn.Conv2d(ic, ic, kernel_size=3, stride=1, padding=1),
                    nn.InstanceNorm2d(ic),
-                   nn.LeakyReLU(0.2, True),
+                   nn.LeakyReLU(negative_slope, True),
                    nn.Conv2d(ic, oc, kernel_size=3, stride=1, padding=1),
                    nn.InstanceNorm2d(oc),
-                   nn.LeakyReLU(0.2, True),
+                   nn.LeakyReLU(negative_slope, True),
                    nn.AvgPool2d(kernel_size=2, stride=2, ceil_mode=False, count_include_pad=False)]
             net = init_weights(net)
             lods.append(nn.Sequential(*net))
@@ -538,11 +537,12 @@ class Discriminator(nn.Module):
         ic, oc = self.get_nf(1), self.get_nf(0)
         net = nn.Sequential(nn.Conv2d(ic, ic, kernel_size=3, stride=1, padding=1),
                            nn.InstanceNorm2d(ic),
-                           nn.LeakyReLU(0.2, True),
+                           nn.LeakyReLU(negative_slope, True),
                            nn.Conv2d(ic, oc, kernel_size=3, stride=1, padding=1),
                            nn.InstanceNorm2d(oc),
-                           nn.LeakyReLU(0.2, True),
+                           nn.LeakyReLU(negative_slope, True),
                            nn.Conv2d(oc,self.num_channels,kernel_size=1,stride=1))
+        net = init_weights(net)
         lods.append(net)
 
         self.output_layer = DSelectLayer(lods, nins)
