@@ -75,11 +75,11 @@ class Data:
                 transforms.Normalize(mean=(0.5,0.5,0.5),std=(0.5,0.5,0.5))
             ])
             
-            max_transform = transforms.Compose([
-                transforms.Resize([self.max_size,self.max_size]),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=(0.5,0.5,0.5),std=(0.5,0.5,0.5))
-            ])
+            # max_transform = transforms.Compose([
+            #     transforms.Resize([self.max_size,self.max_size]),
+            #     transforms.ToTensor(),
+            #     transforms.Normalize(mean=(0.5,0.5,0.5),std=(0.5,0.5,0.5))
+            # ])
 
             result_img = transform(img)
             if cur_level != int(cur_level):
@@ -87,22 +87,22 @@ class Data:
                 lower_res = res//2
                 low_res_img = img.resize((lower_res, lower_res))
                 low_res_img = transform(low_res_img)
-                result_img = 0.5*(low_res_img * lower_res_ratio + result_img * (1-lower_res_ratio))
+                result_img = low_res_img * lower_res_ratio + result_img * (1-lower_res_ratio)
             result_img = result_img.unsqueeze(0)
             if ind == self.count:
                 imgs = result_img
             else:
                 imgs = torch.cat((imgs,result_img),0)
                 
-            max_result_img = max_transform(img)
-            max_result_img = max_result_img.unsqueeze(0)
-            if ind == self.count:
-                max_imgs = max_result_img
-            else:
-                max_imgs = torch.cat((max_imgs,max_result_img),0)
+            # max_result_img = max_transform(img)
+            # max_result_img = max_result_img.unsqueeze(0)
+            # if ind == self.count:
+            #     max_imgs = max_result_img
+            # else:
+            #     max_imgs = torch.cat((max_imgs,max_result_img),0)
                 
         self.count = self.count + batch_size
-        return imgs, max_imgs
+        return imgs
 
 # class CelebA():
 #     def __init__(self):

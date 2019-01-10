@@ -20,33 +20,13 @@ def resize_activations(v, so):
     so = list(so)
     assert len(si) == len(so) and si[0] == so[0]
 
-    # Decrease feature maps.
-    if si[1] > so[1]:
-        v = v[:, :so[1]]
-
     # Shrink spatial axes.
-    if len(si) == 4 and (si[2] > so[2] or si[3] > so[3]):
-        assert si[2] % so[2] == 0 and si[3] % so[3] == 0
-        ks = (si[2] // so[2], si[3] // so[3])
-        v = F.avg_pool2d(v, kernel_size=ks, stride=ks, ceil_mode=False, padding=0, count_include_pad=False)
+    if si[2] > so[2]:
+        v = F.avg_pool2d(v, kernel_size=2, stride=2)
 
-    # Extend spatial axes. Below is a wrong implementation
-    # shape = [1, 1]
-    # for i in range(2, len(si)):
-    #     if si[i] < so[i]:
-    #         assert so[i] % si[i] == 0
-    #         shape += [so[i] // si[i]]
-    #     else:
-    #         shape += [1]
-    # v = v.repeat(*shape)
     if si[2] < so[2]:
-        assert so[2] % si[2] == 0 and so[2] / si[2] == so[3] / si[3]  # currently only support this case
         v = F.upsample(v, scale_factor=so[2] // si[2], mode='nearest')
 
-    # Increase feature maps.
-    if si[1] < so[1]:
-        z = torch.zeros((v.shape[0], so[1] - si[1]) + so[2:])
-        v = torch.cat([v, z], 1)
     return v
 
 class MinibatchStatConcatLayer(nn.Module):
@@ -206,13 +186,14 @@ class WScaleLayer(nn.Module):
         return self.__class__.__name__ + param_str
 
 class GSelectLayer(nn.Module):
-    def __init__(self, pre, chain, post):
+    def __init__(self, pre, en_chain, de_chain, post):
         super(GSelectLayer, self).__init__()
-        assert len(chain) == len(post)
+        assert len(en_chain) == len(de_chain) == len(post)
         self.pre = pre
-        self.chain = chain
+        self.en_chain = en_chain
+        self.de_chain = de_chain
         self.post = post
-        self.N = len(self.chain)
+        self.N = len(self.en_chain)
 
     def forward(self, x, cur_level=None):
         if cur_level is None:
@@ -222,11 +203,17 @@ class GSelectLayer(nn.Module):
         min_level_weight, max_level_weight = int(cur_level + 1) - cur_level, cur_level - int(cur_level)
 
         _from, _to, _step = 0, max_level + 1, 1
-        
-#         print('before pre')
-#         print(x.size())
-        if self.pre is not None:
-            x = self.pre(x)
+
+        pooling = F.avg_pool2d(v, kernel_size=2, stride=2)
+        if not min_level==max_level:
+            max_level_x = self.pre[max_level](x)
+            min_level_x = self.pre[min_level](pooling(x))
+            x = self.en_chain[max_level](max_level_x) * max_level_weight + min_level_x*min_level_weight
+        else:
+            x = self.pre[max_level](x)
+            x = self.en_chain[max_level](x)
+        for level in range(_to-2,_from-1, -_step):
+            x = self.en_chain[level](x)
 
 #         print('after pre')
 #         print(x.size())
@@ -234,7 +221,7 @@ class GSelectLayer(nn.Module):
         out = {}
 
         for level in range(_from, _to, _step):
-            x = self.chain[level](x)
+            x = self.de_chain[level](x)
 
             if level == min_level:
                 out['min_level'] = self.post[level](x)
@@ -355,57 +342,54 @@ class Generator(nn.Module):
         R = int(np.log2(resolution))
         assert resolution == 2 ** R and resolution >= 4
 
-        act = nn.ReLU()
+        act = nn.ReLU(True)
         iact = 'relu'
         output_act = nn.Tanh() if self.tanh_at_end else 'linear'
         output_iact = 'tanh' if self.tanh_at_end else 'linear'
 
+        pres = nn.ModuleList()
+        en_chain = nn.ModuleList()
 
-        pre = [nn.ReflectionPad2d(3),
-               nn.Conv2d(num_channels, self.get_nf(R), kernel_size=7, padding=0),
-               nn.InstanceNorm2d(self.get_nf(R)),
-               nn.ReLU(True)]
-        for i in range(R):
-            ic,oc = self.get_nf(R-i), self.get_nf(R-i-1)
-            pre += [nn.Conv2d(ic, oc, kernel_size=3, stride=2, padding=1),
-                    nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1),
-                    nn.InstanceNorm2d(self.get_nf(R)),
-                    nn.ReLU(True)]
+        for i in range(1, R):
+            ic, oc = self.get_nf(I),self.get_nf(I - 1)
+            pre = nn.Sequential(
+                nn.ReflectionPad2d(3),
+                nn.Conv2d(num_channels, ic, kernel_size=7, padding=0),
+                nn.InstanceNorm2d(ic),
+                act
+            )
+            pre = init_weights(pre)
+            pres.append(pre)
 
-        pre_model = nn.Sequential(*pre)
-        pre_model = init_weights(pre_model)
-
-        lods = nn.ModuleList()
-        nins = nn.ModuleList()
-
-        oc = self.get_nf(1)
-        layers = [nn.Conv2d(latent_size, oc, kernel_size=4, stride=1, padding=3),
-                    nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1),
-                    nn.InstanceNorm2d(oc),
-                    nn.ReLU(True)]
-        net = nn.Sequential(*layers)
-
-        lods.append(net)
-        nins.append(nn.Sequential(nn.ReflectionPad2d(3),
-                                      nn.Conv2d(oc, self.num_channels, kernel_size=7, padding=0),
-                                      nn.Tanh()))  # to_rgb layer
-
-        for I in range(2, R):  # following blocks
-            ic, oc = self.get_nf(I - 1), self.get_nf(I)
-            layers = [nn.ConvTranspose2d(ic, oc, kernel_size=3, stride=2, padding=1, output_padding=1),
-                      nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1),
-                      nn.InstanceNorm2d(oc),
-                      nn.ReLU(True)]
-            net = nn.Sequential(*layers)
+            net = nn.Sequential(
+                nn.Conv2d(ic, oc, kernel_size=3, stride=2, padding=1),
+                nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1),
+                nn.InstanceNorm2d(self.get_nf(R)),
+                act
+            )
             net = init_weights(net)
-            lods.append(net)
-            nin = nn.Sequential(nn.ReflectionPad2d(3),
+            en_chain.append(net)
+
+        de_chain = nn.ModuleList()
+        posts = nn.ModuleList()
+
+        for I in range(1, R):  # following blocks
+            ic, oc = self.get_nf(I - 1), self.get_nf(I)
+            net = nn.Sequential(
+                nn.ConvTranspose2d(ic, oc, kernel_size=3, stride=2, padding=1, output_padding=1),
+                nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1),
+                nn.InstanceNorm2d(oc),
+                act
+            )
+            net = init_weights(net)
+            de_chain.append(net)
+            post = nn.Sequential(nn.ReflectionPad2d(3),
                                       nn.Conv2d(oc, self.num_channels, kernel_size=7, padding=0),
                                       nn.Tanh())
-            nin = init_weights(nin)
-            nins.append(nin)  # to_rgb layer
+            post = init_weights(post)
+            posts.append(post)  # to_rgb layer
 
-        self.output_layer = GSelectLayer(pre_model, lods, nins)
+        self.output_layer = GSelectLayer(pres, en_chain, de_chain, posts)
 
     def get_nf(self, stage):
         return min(int(self.fmap_base / (2.0 ** (stage * self.fmap_decay))), self.fmap_max)
