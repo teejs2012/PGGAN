@@ -392,8 +392,7 @@ class Generator(nn.Module):
 
         for I in range(2, R):  # following blocks
             ic, oc = self.get_nf(I - 1), self.get_nf(I)
-            layers = [nn.Upsample(scale_factor=2, mode='nearest'),
-                      nn.Conv2d(ic, oc, kernel_size=3, stride=1, padding=1),
+            layers = [nn.ConvTranspose2d(ic, oc, kernel_size=3, stride=2, padding=1, output_padding=1),
                       nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1),
                       nn.InstanceNorm2d(oc),
                       nn.ReLU(True)]
@@ -506,13 +505,12 @@ class Discriminator(nn.Module):
 
         for I in range(R-1, 1, -1):
             ic, oc = self.get_nf(I), self.get_nf(I-1)
-            net = nn.Sequential(nn.Conv2d(ic, ic, kernel_size=3, stride=1, padding=1),
+            net = nn.Sequential(nn.Conv2d(ic, ic, kernel_size=3, stride=2, padding=1),
                    nn.InstanceNorm2d(ic),
                    nn.LeakyReLU(negative_slope, True),
                    nn.Conv2d(ic, oc, kernel_size=3, stride=1, padding=1),
                    nn.InstanceNorm2d(oc),
-                   nn.LeakyReLU(negative_slope, True),
-                   nn.AvgPool2d(kernel_size=2, stride=2, ceil_mode=False, count_include_pad=False))
+                   nn.LeakyReLU(negative_slope, True))
             net = init_weights(net)
             lods.append(net)
 
@@ -521,10 +519,10 @@ class Discriminator(nn.Module):
             nins.append(nin)
 
         ic, oc = self.get_nf(1), self.get_nf(0)
-        net = nn.Sequential(nn.Conv2d(ic, ic, kernel_size=3, stride=1, padding=1),
+        net = nn.Sequential(nn.Conv2d(ic, ic, kernel_size=3, stride=2, padding=1),
                            nn.InstanceNorm2d(ic),
                            nn.LeakyReLU(negative_slope, True),
-                           nn.Conv2d(ic, oc, kernel_size=3, stride=1, padding=1),
+                           nn.Conv2d(ic, oc, kernel_size=3, stride=2, padding=1),
                            nn.InstanceNorm2d(oc),
                            nn.LeakyReLU(negative_slope, True),
                            nn.Conv2d(oc,self.num_channels,kernel_size=1,stride=1))
