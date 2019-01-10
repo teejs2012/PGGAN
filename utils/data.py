@@ -60,7 +60,7 @@ class Data:
         self.count = 0
         self.max_size = max_size
 
-    def next(self, batch_size, res, cur_level = None):
+    def next(self, batch_size, res, cur_level):
         if self.count+batch_size >= len(self.files):
             self.count = 0
         imgs = []
@@ -82,12 +82,12 @@ class Data:
             ])
 
             result_img = transform(img)
-            if cur_level and cur_level != int(cur_level):
+            if cur_level != int(cur_level):
                 lower_res_ratio = int(cur_level + 1) - cur_level
                 lower_res = res//2
                 low_res_img = img.resize((lower_res, lower_res))
                 low_res_img = transform(low_res_img)
-                result_img = low_res_img * lower_res_ratio + result_img * (1-lower_res_ratio)
+                result_img = 0.5*(low_res_img * lower_res_ratio + result_img * (1-lower_res_ratio))
             result_img = result_img.unsqueeze(0)
             if ind == self.count:
                 imgs = result_img
