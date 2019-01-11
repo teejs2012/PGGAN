@@ -204,7 +204,7 @@ class GSelectLayer(nn.Module):
 
         _from, _to, _step = 0, max_level + 1, 1
 
-        pooling = F.avg_pool2d(v, kernel_size=2, stride=2)
+        pooling = nn.AvgPool2d(2,stride=2)
         if not min_level==max_level:
             max_level_x = self.pre[max_level](x)
             min_level_x = self.pre[min_level](pooling(x))
@@ -241,6 +241,7 @@ class DSelectLayer(nn.Module):
         self.N = len(self.chain)
 
     def forward(self, x, cur_level=None):
+        print('doing Dselectlayer')
         if cur_level is None:
             cur_level = self.N  # cur_level: physical index
 
@@ -251,7 +252,9 @@ class DSelectLayer(nn.Module):
 
         if max_level == min_level:
             x = self.inputs[max_level](x)
+            print(x.size())
             x = self.chain[max_level](x)
+            print(x.size())
         else:
             out = {}
             tmp = self.inputs[max_level](x)
@@ -264,7 +267,7 @@ class DSelectLayer(nn.Module):
 
         for level in range(_from, _to, _step):
             x = self.chain[level](x)
-
+            print(x.size())
         return x
 
 
@@ -351,7 +354,7 @@ class Generator(nn.Module):
         en_chain = nn.ModuleList()
 
         for i in range(1, R):
-            ic, oc = self.get_nf(I),self.get_nf(I - 1)
+            ic, oc = self.get_nf(i),self.get_nf(i - 1)
             pre = nn.Sequential(
                 nn.ReflectionPad2d(3),
                 nn.Conv2d(num_channels, ic, kernel_size=7, padding=0),
@@ -373,8 +376,8 @@ class Generator(nn.Module):
         de_chain = nn.ModuleList()
         posts = nn.ModuleList()
 
-        for I in range(1, R):  # following blocks
-            ic, oc = self.get_nf(I - 1), self.get_nf(I)
+        for i in range(1, R):  # following blocks
+            ic, oc = self.get_nf(i - 1), self.get_nf(i)
             net = nn.Sequential(
                 nn.ConvTranspose2d(ic, oc, kernel_size=3, stride=2, padding=1, output_padding=1),
                 nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1),
@@ -509,7 +512,7 @@ class Discriminator(nn.Module):
                            nn.Conv2d(ic, oc, kernel_size=3, stride=2, padding=1),
                            nn.InstanceNorm2d(oc),
                            nn.LeakyReLU(negative_slope, True),
-                           nn.Conv2d(oc,self.num_channels,kernel_size=1,stride=1))
+                           nn.Conv2d(oc,1,kernel_size=1,stride=1))
         net = init_weights(net)
         lods.append(net)
 
