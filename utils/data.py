@@ -57,11 +57,13 @@ class Data:
         if not os.path.isdir(folder):
             print("the folder does not exist")
         self.files = os.listdir(self.datapath)
+        np.random.shuffle(self.files)
         self.count = 0
         self.max_size = max_size
 
     def next(self, batch_size, res, cur_level):
         if self.count+batch_size >= len(self.files):
+            np.random.shuffle(self.files)
             self.count = 0
         imgs = []
         for ind in range(self.count,self.count+batch_size):
@@ -74,12 +76,6 @@ class Data:
                 transforms.ToTensor(),
                 transforms.Normalize(mean=(0.5,0.5,0.5),std=(0.5,0.5,0.5))
             ])
-            
-            # max_transform = transforms.Compose([
-            #     transforms.Resize([self.max_size,self.max_size]),
-            #     transforms.ToTensor(),
-            #     transforms.Normalize(mean=(0.5,0.5,0.5),std=(0.5,0.5,0.5))
-            # ])
 
             result_img = transform(img)
             if cur_level != int(cur_level):

@@ -6,6 +6,7 @@ from torch.nn.parameter import Parameter
 from torch.nn import functional as F
 from torch.nn.init import kaiming_normal, calculate_gain
 import numpy as np
+import functools
 import sys
 
 
@@ -241,7 +242,7 @@ class DSelectLayer(nn.Module):
         self.N = len(self.chain)
 
     def forward(self, x, cur_level=None):
-        print('doing Dselectlayer')
+#         print('doing Dselectlayer')
         if cur_level is None:
             cur_level = self.N  # cur_level: physical index
 
@@ -251,10 +252,15 @@ class DSelectLayer(nn.Module):
         _from, _to, _step = min_level + 1, self.N, 1
 
         if max_level == min_level:
+#             print('original x',x[0])
             x = self.inputs[max_level](x)
-            print(x.size())
+#             print('after first layer')
+#             print(x.size())
+#             print(x[0])
             x = self.chain[max_level](x)
-            print(x.size())
+#             print('after second layer')
+#             print(x.size())
+#             print(x[0])
         else:
             out = {}
             tmp = self.inputs[max_level](x)
@@ -267,7 +273,7 @@ class DSelectLayer(nn.Module):
 
         for level in range(_from, _to, _step):
             x = self.chain[level](x)
-            print(x.size())
+#             print(x.size())
         return x
 
 
@@ -349,6 +355,7 @@ class Generator(nn.Module):
         iact = 'relu'
         output_act = nn.Tanh() if self.tanh_at_end else 'linear'
         output_iact = 'tanh' if self.tanh_at_end else 'linear'
+        norm_layer = functools.partial(nn.BatchNorm2d, affine=False, track_running_stats=False)
 
         pres = nn.ModuleList()
         en_chain = nn.ModuleList()
@@ -357,17 +364,17 @@ class Generator(nn.Module):
             ic, oc = self.get_nf(i),self.get_nf(i - 1)
             pre = nn.Sequential(
                 nn.ReflectionPad2d(3),
-                nn.Conv2d(num_channels, ic, kernel_size=7, padding=0),
-                nn.InstanceNorm2d(ic),
+                nn.Conv2d(num_channels, ic, kernel_size=7, padding=0, bias=True),
+                norm_layer(ic),
                 act
             )
             pre = init_weights(pre)
             pres.append(pre)
 
             net = nn.Sequential(
-                nn.Conv2d(ic, oc, kernel_size=3, stride=2, padding=1),
-                nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1),
-                nn.InstanceNorm2d(self.get_nf(R)),
+                nn.Conv2d(ic, oc, kernel_size=3, stride=2, padding=1, bias=True),
+                nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1, bias=True),
+                norm_layer(oc),
                 act
             )
             net = init_weights(net)
@@ -379,15 +386,15 @@ class Generator(nn.Module):
         for i in range(1, R):  # following blocks
             ic, oc = self.get_nf(i - 1), self.get_nf(i)
             net = nn.Sequential(
-                nn.ConvTranspose2d(ic, oc, kernel_size=3, stride=2, padding=1, output_padding=1),
-                nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1),
-                nn.InstanceNorm2d(oc),
+                nn.ConvTranspose2d(ic, oc, kernel_size=3, stride=2, padding=1, output_padding=1, bias=True),
+                nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1, bias=True),
+                norm_layer(oc),
                 act
             )
             net = init_weights(net)
             de_chain.append(net)
             post = nn.Sequential(nn.ReflectionPad2d(3),
-                                      nn.Conv2d(oc, self.num_channels, kernel_size=7, padding=0),
+                                      nn.Conv2d(oc, self.num_channels, kernel_size=7, padding=0, bias=True),
                                       nn.Tanh())
             post = init_weights(post)
             posts.append(post)  # to_rgb layer
@@ -416,9 +423,9 @@ def init_weights(net, init_type='normal', gain=0.02):
                 raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
             if hasattr(m, 'bias') and m.bias is not None:
                 init.constant_(m.bias.data, 0.0)
-        elif classname.find('BatchNorm2d') != -1:
-            init.normal_(m.weight.data, 1.0, gain)
-            init.constant_(m.bias.data, 0.0)
+#         elif classname.find('BatchNorm2d') != -1:
+#             init.normal_(m.weight.data, 1.0, gain)
+#             init.constant_(m.bias.data, 0.0)
 
 #     print('initialize network with %s' % init_type)
     net.apply(init_func)
@@ -475,10 +482,12 @@ class Discriminator(nn.Module):
         gdrop_strength = 0.0
 
         negative_slope = 0.2
-        act = nn.LeakyReLU(negative_slope=negative_slope)
+        act = nn.LeakyReLU(negative_slope,True)
         # input activation
         iact = 'leaky_relu'
         # output activation
+#         norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
+        norm_layer = functools.partial(nn.BatchNorm2d, affine=False, track_running_stats=False)
         output_act = nn.Sigmoid() if self.sigmoid_at_end else 'linear'
         output_iact = 'sigmoid' if self.sigmoid_at_end else 'linear'
         gdrop_param = {'mode': 'prop', 'strength': gdrop_strength}
@@ -486,33 +495,35 @@ class Discriminator(nn.Module):
         nins = nn.ModuleList()
         lods = nn.ModuleList()
 
-        nin = nn.Conv2d(self.num_channels, self.get_nf(R-1), kernel_size=7, stride=1, padding=3)
+        nin = nn.Conv2d(self.num_channels, self.get_nf(R-1), kernel_size=7, stride=1, padding=3, bias=True)
         nin = init_weights(nin)
         nins.append(nin)
 
         for I in range(R-1, 1, -1):
             ic, oc = self.get_nf(I), self.get_nf(I-1)
-            net = nn.Sequential(nn.Conv2d(ic, ic, kernel_size=3, stride=2, padding=1),
-                   nn.InstanceNorm2d(ic),
-                   nn.LeakyReLU(negative_slope, True),
-                   nn.Conv2d(ic, oc, kernel_size=3, stride=1, padding=1),
-                   nn.InstanceNorm2d(oc),
-                   nn.LeakyReLU(negative_slope, True))
+            net = nn.Sequential(
+                   nn.Conv2d(ic, ic, kernel_size=3, stride=2, padding=1, bias=True),
+                   norm_layer(ic),
+                   act,
+                   nn.Conv2d(ic, oc, kernel_size=3, stride=1, padding=1, bias=True),
+                   norm_layer(oc),
+                   act)
             net = init_weights(net)
             lods.append(net)
 
-            nin = nn.Conv2d(self.num_channels, oc, kernel_size=7, stride=1, padding=3)
+            nin = nn.Conv2d(self.num_channels, oc, kernel_size=7, stride=1, padding=3, bias=True)
             nin = init_weights(nin)
             nins.append(nin)
 
         ic, oc = self.get_nf(1), self.get_nf(0)
-        net = nn.Sequential(nn.Conv2d(ic, ic, kernel_size=3, stride=2, padding=1),
-                           nn.InstanceNorm2d(ic),
-                           nn.LeakyReLU(negative_slope, True),
-                           nn.Conv2d(ic, oc, kernel_size=3, stride=2, padding=1),
-                           nn.InstanceNorm2d(oc),
-                           nn.LeakyReLU(negative_slope, True),
-                           nn.Conv2d(oc,1,kernel_size=1,stride=1))
+        net = nn.Sequential(
+#                            nn.Conv2d(ic, ic, kernel_size=3, stride=2, padding=1, bias=True),
+#                            norm_layer(ic),
+#                            act,
+                           nn.Conv2d(ic, oc, kernel_size=3, stride=2, padding=1, bias=True),
+                           norm_layer(oc),
+                           act,
+                           nn.Conv2d(oc,1,kernel_size=1,stride=1, bias=True))
         net = init_weights(net)
         lods.append(net)
 
@@ -521,9 +532,51 @@ class Discriminator(nn.Module):
     def get_nf(self, stage):
         return min(int(self.fmap_base / (2.0 ** (stage * self.fmap_decay))), self.fmap_max)
 
-    def forward(self, x, cur_level=None, gdrop_strength=0.0):
-        for module in self.modules():
-            if hasattr(module, 'strength'):
-                module.strength = gdrop_strength
-        return self.output_layer(x, cur_level)
+    def forward(self, x, cur_level=None):
+        result = self.output_layer(x, cur_level)
+#         print('curlevel is %.3f'%cur_level)
+#         print(x.size())
+#         print(result.size())
+        return result
 
+# class Generator_test(nn.Module):
+#     def __init__(self):
+#         super(Generator_test, self).__init__()
+#         norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
+#         act = nn.ReLU(True)
+#         model = nn.Sequential(
+#             nn.Conv2d(3,512,kernel_size=7,stride=1,padding=3,bias=True),
+#             nn.Conv2d(512,512,kernel_size=3,stride=2,padding=1,bias=True),
+#             norm_layer(512),
+#             act,
+#             nn.ConvTranspose2d(512,512,kernel_size=3,stride=2,padding=1,output_padding=1,bias=True),
+#             norm_layer(512),
+#             act,
+#             nn.Conv2d(512,3,kernel_size=7,stride=1,padding=3,bias=True),
+#             nn.Tanh()
+#         )
+#         self.model = model
+# #         self.model = init_weights(model)
+#     def forward(self,input,cur_level=1):
+#         return self.model(input)
+    
+# class Discriminator_test(nn.Module):
+#     def __init__(self):
+#         super(Discriminator_test,self).__init__()
+#         norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
+#         act = nn.ReLU(True)
+#         model = nn.Sequential(
+#             nn.Conv2d(3,512,kernel_size=7,stride=1,padding=3,bias=True),
+#             nn.Conv2d(512,512,kernel_size=3,stride=2,padding=1,bias=True),
+#             norm_layer(512),
+#             act,
+#             nn.Conv2d(512,512,kernel_size=3,stride=2,padding=1,bias=True),
+#             norm_layer(512),
+#             act,
+#             nn.Conv2d(512,1,kernel_size=3,stride=1,padding=1,bias=True)
+#         )
+#         self.model = model
+# #         self.model = init_weights(model)
+#     def forward(self,input,cur_level=1):
+#         return self.model(input)
+    
