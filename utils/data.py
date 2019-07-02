@@ -60,7 +60,10 @@ class Data:
         np.random.shuffle(self.files)
         self.count = 0
         self.max_size = max_size
-
+    
+    def get_count(self):
+        return len(self.files)
+    
     def next(self, batch_size, res, cur_level):
         if self.count+batch_size >= len(self.files):
             np.random.shuffle(self.files)
@@ -73,10 +76,11 @@ class Data:
 
             transform = transforms.Compose([
                 transforms.Resize([res,res]),
+#                 transforms.RandomHorizontalFlip(),
+#                 transforms.ColorJitter(0.1,0.1,0.1,0.1),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=(0.5,0.5,0.5),std=(0.5,0.5,0.5))
             ])
-
             result_img = transform(img)
             if cur_level != int(cur_level):
                 lower_res_ratio = int(cur_level + 1) - cur_level
@@ -84,6 +88,8 @@ class Data:
                 low_res_img = img.resize((lower_res, lower_res))
                 low_res_img = transform(low_res_img)
                 result_img = low_res_img * lower_res_ratio + result_img * (1-lower_res_ratio)
+                
+#             result_img = transform(img)
             result_img = result_img.unsqueeze(0)
             if ind == self.count:
                 imgs = result_img

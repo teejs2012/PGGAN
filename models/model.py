@@ -199,7 +199,10 @@ class GSelectLayer(nn.Module):
     def forward(self, x, cur_level=None):
         if cur_level is None:
             cur_level = self.N  # cur_level: physical index
-
+        pre_used=[]
+        enchain_used=[]
+        dechain_used=[]
+        post_used=[]
         min_level, max_level = int(np.floor(cur_level - 1)), int(np.ceil(cur_level - 1))
         min_level_weight, max_level_weight = int(cur_level + 1) - cur_level, cur_level - int(cur_level)
 
@@ -208,14 +211,20 @@ class GSelectLayer(nn.Module):
         pooling = nn.AvgPool2d(2,stride=2)
         if not min_level==max_level:
             max_level_x = self.pre[max_level](x)
+            pre_used.append(max_level)
             min_level_x = self.pre[min_level](pooling(x))
+            pre_used+=[max_level,min_level]
+            
             x = self.en_chain[max_level](max_level_x) * max_level_weight + min_level_x*min_level_weight
+            enchain_used.append(max_level)
         else:
             x = self.pre[max_level](x)
             x = self.en_chain[max_level](x)
+            pre_used.append(max_level)
+            enchain_used.append(max_level)
         for level in range(_to-2,_from-1, -_step):
             x = self.en_chain[level](x)
-
+            enchain_used.append(level)
 #         print('after pre')
 #         print(x.size())
         
@@ -223,15 +232,21 @@ class GSelectLayer(nn.Module):
 
         for level in range(_from, _to, _step):
             x = self.de_chain[level](x)
-
+            dechain_used.append(level)
+            
             if level == min_level:
                 out['min_level'] = self.post[level](x)
+                post_used.append(level)
             if level == max_level:
-                out['max_level'] = self.post[level](x)
-                x = resize_activations(out['min_level'], out['max_level'].size()) * min_level_weight + \
-                    out['max_level'] * max_level_weight
+                if max_level==min_level:
+                    x = out['min_level']
+                else:
+                    out['max_level'] = self.post[level](x)
+                    post_used.append(level)
+                    x = resize_activations(out['min_level'], out['max_level'].size()) * min_level_weight + \
+                        out['max_level'] * max_level_weight
 
-        return x
+        return x, {'pre_used':pre_used,'enchain_used':enchain_used,'dechain_used':dechain_used,'post_used':post_used}
 
 class DSelectLayer(nn.Module):
     def __init__(self, chain, inputs):
@@ -245,7 +260,9 @@ class DSelectLayer(nn.Module):
 #         print('doing Dselectlayer')
         if cur_level is None:
             cur_level = self.N  # cur_level: physical index
-
+        chain_used=[]
+        inputs_used=[]
+        
         max_level, min_level = int(np.floor(self.N - cur_level)), int(np.ceil(self.N - cur_level))
         min_level_weight, max_level_weight = int(cur_level + 1) - cur_level, cur_level - int(cur_level)
 
@@ -254,10 +271,12 @@ class DSelectLayer(nn.Module):
         if max_level == min_level:
 #             print('original x',x[0])
             x = self.inputs[max_level](x)
+            inputs_used.append(max_level)
 #             print('after first layer')
 #             print(x.size())
 #             print(x[0])
             x = self.chain[max_level](x)
+            chain_used.append(max_level)
 #             print('after second layer')
 #             print(x.size())
 #             print(x[0])
@@ -265,16 +284,21 @@ class DSelectLayer(nn.Module):
             out = {}
             tmp = self.inputs[max_level](x)
             tmp = self.chain[max_level](tmp)
+            inputs_used.append(max_level)
+            chain_used.append(max_level)
             out['max_level'] = tmp
             out['min_level'] = self.inputs[min_level](x)
+            inputs_used.append(min_level)
             x = resize_activations(out['min_level'], out['max_level'].size()) * min_level_weight + \
                 out['max_level'] * max_level_weight
             x = self.chain[min_level](x)
+            chain_used.append(min_level)
 
         for level in range(_from, _to, _step):
             x = self.chain[level](x)
+            chain_used.append(level)
 #             print(x.size())
-        return x
+        return x, {'inputs_used':inputs_used,'chain_used':chain_used}
 
 
 def he_init(layer, nonlinearity='conv2d', param=None):
@@ -335,7 +359,8 @@ class Generator(nn.Module):
                  use_wscale=True,
                  use_pixelnorm=True,
                  use_batchnorm=False,
-                 tanh_at_end=None):
+                 tanh_at_end=None,
+                 resnets=0):
         super(Generator, self).__init__()
         self.num_channels = num_channels
         self.resolution = resolution
@@ -356,6 +381,7 @@ class Generator(nn.Module):
         output_act = nn.Tanh() if self.tanh_at_end else 'linear'
         output_iact = 'tanh' if self.tanh_at_end else 'linear'
         norm_layer = functools.partial(nn.BatchNorm2d, affine=False, track_running_stats=False)
+#         norm_layer = functools.partial(nn.InstanceNorm2d, affine=False, track_running_stats=False)
 
         pres = nn.ModuleList()
         en_chain = nn.ModuleList()
@@ -385,14 +411,18 @@ class Generator(nn.Module):
 
         for i in range(1, R):  # following blocks
             ic, oc = self.get_nf(i - 1), self.get_nf(i)
-            net = nn.Sequential(
+            net=[]
+            net += [
                 nn.ConvTranspose2d(ic, oc, kernel_size=3, stride=2, padding=1, output_padding=1, bias=True),
                 nn.Conv2d(oc, oc, kernel_size=3, stride=1, padding=1, bias=True),
                 norm_layer(oc),
                 act
-            )
-            net = init_weights(net)
-            de_chain.append(net)
+            ]
+            for n in range(resnets):
+                net+=[resnet(oc, padding_type='reflect', norm_layer=norm_layer, use_bias=True)]
+            model = nn.Sequential(*net)
+            model = init_weights(model)
+            de_chain.append(model)
             post = nn.Sequential(nn.ReflectionPad2d(3),
                                       nn.Conv2d(oc, self.num_channels, kernel_size=7, padding=0, bias=True),
                                       nn.Tanh())
@@ -502,12 +532,14 @@ class Discriminator(nn.Module):
         for I in range(R-1, 1, -1):
             ic, oc = self.get_nf(I), self.get_nf(I-1)
             net = nn.Sequential(
-                   nn.Conv2d(ic, ic, kernel_size=3, stride=2, padding=1, bias=True),
-                   norm_layer(ic),
-                   act,
-                   nn.Conv2d(ic, oc, kernel_size=3, stride=1, padding=1, bias=True),
+#                    nn.Conv2d(ic, ic, kernel_size=3, stride=2, padding=1, bias=True),
+#                    norm_layer(ic),
+#                    act,
+                   nn.Conv2d(ic, oc, kernel_size=5, stride=2, padding=2, bias=True),
                    norm_layer(oc),
-                   act)
+                   act,
+#                    nn.Dropout(p=0.2)
+            )
             net = init_weights(net)
             lods.append(net)
 
@@ -516,16 +548,21 @@ class Discriminator(nn.Module):
             nins.append(nin)
 
         ic, oc = self.get_nf(1), self.get_nf(0)
-        net = nn.Sequential(
+        net = [
 #                            nn.Conv2d(ic, ic, kernel_size=3, stride=2, padding=1, bias=True),
 #                            norm_layer(ic),
 #                            act,
-                           nn.Conv2d(ic, oc, kernel_size=3, stride=2, padding=1, bias=True),
+                           nn.Conv2d(ic, oc, kernel_size=5, stride=1, padding=2, bias=True),
                            norm_layer(oc),
                            act,
-                           nn.Conv2d(oc,1,kernel_size=1,stride=1, bias=True))
-        net = init_weights(net)
-        lods.append(net)
+                           nn.Dropout(p=0.4),
+                           nn.Conv2d(oc,1,kernel_size=5,stride=1,padding=2,bias=True)
+        ]
+        if sigmoid_at_end:
+            net += [nn.Sigmoid()]
+        model = nn.Sequential(*net)
+        model = init_weights(model)
+        lods.append(model)
 
         self.output_layer = DSelectLayer(lods, nins)
 
@@ -538,6 +575,46 @@ class Discriminator(nn.Module):
 #         print(x.size())
 #         print(result.size())
         return result
+
+class resnet(nn.Module):
+    def __init__(self, dim, padding_type, norm_layer, use_bias):
+        super(resnet, self).__init__()
+        self.conv_block = self.build_conv_block(dim, padding_type, norm_layer, use_bias)
+
+    def build_conv_block(self, dim, padding_type, norm_layer, use_bias):
+        conv_block = []
+        p = 0
+        if padding_type == 'reflect':
+            conv_block += [nn.ReflectionPad2d(1)]
+        elif padding_type == 'replicate':
+            conv_block += [nn.ReplicationPad2d(1)]
+        elif padding_type == 'zero':
+            p = 1
+        else:
+            raise NotImplementedError('padding [%s] is not implemented' % padding_type)
+
+        conv_block += [nn.Conv2d(dim, dim, kernel_size=3, padding=p, bias=use_bias),
+                       norm_layer(dim),
+                       nn.ReLU(True)]
+
+        p = 0
+        if padding_type == 'reflect':
+            conv_block += [nn.ReflectionPad2d(1)]
+        elif padding_type == 'replicate':
+            conv_block += [nn.ReplicationPad2d(1)]
+        elif padding_type == 'zero':
+            p = 1
+        else:
+            raise NotImplementedError('padding [%s] is not implemented' % padding_type)
+        conv_block += [nn.Conv2d(dim, dim, kernel_size=3, padding=p, bias=use_bias),
+                       norm_layer(dim)]
+
+        return nn.Sequential(*conv_block)
+
+    def forward(self, x):
+        out = x + self.conv_block(x)
+        return out
+
 
 # class Generator_test(nn.Module):
 #     def __init__(self):
